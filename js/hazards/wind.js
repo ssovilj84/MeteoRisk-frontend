@@ -16,7 +16,7 @@
 
    IMPORTANT:
    Missing ICON native 3-hour terms are never interpolated and never
-   treated as zero. Those terms are explicitly GEFS-only.
+   treated as zero. Terms with fewer available RATIFIED streams are represented explicitly through Registry provenance.
    ============================================================ */
 
 const WIND_V2_MANIFEST_FILE = "data/wind/manifest.json";
@@ -258,9 +258,14 @@ async function applyWindV2Overlay(data) {
     data.wind_available = matched > 0;
     data.wind_v2_available = matched > 0;
     data.wind_v2_matches = matched;
-    data.wind_source = payload.models || term.models || "";
+    data.wind_stream_ids = Array.isArray(payload.stream_ids) ? payload.stream_ids : (term.stream_ids || []);
+    data.wind_model_count = Number(payload.model_count ?? term.model_count ?? 0);
+    data.wind_source_runs = payload.source_runs || {};
+    data.wind_data_status = payload.data_status || term.data_status || "";
+    data.wind_fallback_used = Boolean(payload.fallback_used ?? term.fallback_used);
+    data.wind_initialization_skew_hours = Number(payload.initialization_skew_hours ?? 0);
+    data.wind_source = data.wind_stream_ids.join(", ");
     data.wind_run_id = manifest.run_id || "";
-    data.wind_model_run = payload.model_run || manifest.model_run || "";
     data.wind_valid_time = payload.valid_time || term.valid_time || "";
     data.wind_forecast_hour = Number(
         payload.forecast_hour ?? term.forecast_hour
@@ -449,7 +454,7 @@ function windV2ImpactRecommendation(data) {
 
 function windV2ProbabilityRows(prefix, data) {
     const thresholds = [
-        [17, 61],
+        [15, 54],
         [20, 72],
         [25, 90],
         [32, 115]
@@ -467,96 +472,52 @@ function windV2ProbabilityRows(prefix, data) {
 
 
 function windV2TechnicalHtml(data) {
-    if (!windV2DataAvailable(data)) {
-        return "";
+    if (!windV2DataAvailable(data)) return "";
+
+    const difference = Number(data.wind_model_max_probability_difference);
+    const trigger = Number(data.wind_trigger_threshold_ms);
+    const triggerProbability = Number(data.wind_trigger_probability);
+    const streamIds = String(data.wind_stream_ids || data.wind_models_available || "").split(",").map(x => x.trim()).filter(Boolean);
+    const modelCount = Number(data.wind_model_count || streamIds.length || 0);
+    const dataStatus = data.wind_data_status || "—";
+    const fallbackUsed = Boolean(data.wind_fallback_used);
+    let sourceRuns = data.wind_source_runs || "";
+    if (typeof sourceRuns === "string") {
+        try { sourceRuns = JSON.parse(sourceRuns); } catch (_) { sourceRuns = {}; }
     }
-
-    const iconAvailable = Boolean(
-        data.wind_icon_native_available
-    );
-
-    const difference = Number(
-        data.wind_model_max_probability_difference
-    );
-
-    const trigger = Number(
-        data.wind_trigger_threshold_ms
-    );
-
-    const triggerProbability = Number(
-        data.wind_trigger_probability
-    );
+    const runText = sourceRuns && typeof sourceRuns === "object"
+        ? Object.entries(sourceRuns).map(([stream, run]) => `${stream}: ${run}`).join(" · ")
+        : "";
 
     return `
         <div class="multimodel-card">
             <div class="popup-section">
                 ${currentLanguage === "sr" ? "Коначне мултимоделске вероватноће" : "Final multimodel probabilities"}
             </div>
-
             ${windV2ProbabilityRows("wind_p", data)}
-
             <div class="popup-row">
-                ${currentLanguage === "sr" ? "Доступни модели" : "Available models"}:
-                <b>${data.wind_models_available || "—"}</b>
+                ${currentLanguage === "sr" ? "Активни stream-ови" : "Active streams"}:
+                <b>${streamIds.join(", ") || "—"}</b>
             </div>
-
+            <div class="popup-row">
+                ${currentLanguage === "sr" ? "Број модела" : "Model count"}:
+                <b>${modelCount || "—"}</b>
+            </div>
+            <div class="popup-row">
+                ${currentLanguage === "sr" ? "Статус података" : "Data status"}:
+                <b>${dataStatus}</b>
+            </div>
             <div class="popup-row">
                 ${currentLanguage === "sr" ? "Поузданост" : "Confidence"}:
                 <b>${windV2ConfidenceName(data.wind_confidence)}</b>
             </div>
-
-            ${Number.isFinite(difference) ? `
-                <div class="popup-row">
-                    ${currentLanguage === "sr" ? "Максимална разлика модела" : "Maximum model difference"}:
-                    <b>${formatNumber(difference, 1)} pp</b>
-                </div>
-            ` : ""}
-
-            ${Number.isFinite(trigger) ? `
-                <div class="popup-row">
-                    ${currentLanguage === "sr" ? "Праг који одређује ризик" : "Risk-determining threshold"}:
-                    <b>${formatNumber(trigger, 0)} m/s @ ${formatProbability(triggerProbability)}</b>
-                </div>
-            ` : ""}
-
-            <div class="popup-section">GEFS</div>
-            ${windV2ProbabilityRows("wind_gefs_p", data)}
-            <div class="popup-row">
-                ${currentLanguage === "sr" ? "Удари GEFS (медијана–P90)" : "GEFS gusts (median–P90)"}:
-                <b>${formatNumber(data.wind_gefs_gust_median, 1)}–${formatNumber(data.wind_gefs_gust_p90, 1)} m/s</b>
-            </div>
-
-            <div class="popup-section">ICON-EU EPS</div>
-
-            ${iconAvailable
-                ? windV2ProbabilityRows("wind_icon_p", data)
-                : `
-                    <div class="popup-note">
-                        ${currentLanguage === "sr"
-                            ? "ICON-EU EPS нема native 3-часовни термин. ICON вредност није интерполирана и није третирана као нула; јавни сигнал у овом термину је GEFS-only."
-                            : "ICON-EU EPS has no native 3-hourly term. ICON is neither interpolated nor treated as zero; the public signal in this slot is GEFS-only."}
-                    </div>
-                `}
-
-            ${iconAvailable ? `
-                <div class="popup-row">
-                    ${currentLanguage === "sr" ? "Удари ICON (медијана–P90)" : "ICON gusts (median–P90)"}:
-                    <b>${formatNumber(data.wind_icon_gust_median, 1)}–${formatNumber(data.wind_icon_gust_p90, 1)} m/s</b>
-                </div>
-            ` : ""}
-
-            ${data.wind_purple_agreement_gate_applied ? `
-                <div class="popup-note">
-                    ${currentLanguage === "sr"
-                        ? "Кандидат за љубичасти ниво није имао довољну подршку оба модела; примењен је multimodel agreement gate."
-                        : "The purple-level candidate lacked sufficient support from both models; the multimodel agreement gate was applied."}
-                </div>
-            ` : ""}
-
+            ${Number.isFinite(difference) ? `<div class="popup-row">${currentLanguage === "sr" ? "Максимална разлика модела" : "Maximum model difference"}: <b>${formatNumber(difference, 1)} pp</b></div>` : ""}
+            ${Number.isFinite(trigger) ? `<div class="popup-row">${currentLanguage === "sr" ? "Праг који одређује ризик" : "Risk-determining threshold"}: <b>${formatNumber(trigger, 0)} m/s @ ${formatProbability(triggerProbability)}</b></div>` : ""}
+            ${runText ? `<div class="popup-row">${currentLanguage === "sr" ? "Изворни run-ови" : "Source runs"}: <b>${runText}</b></div>` : ""}
+            ${fallbackUsed ? `<div class="popup-note">${currentLanguage === "sr" ? "Коришћен је Registry fallback за најмање један stream." : "Registry fallback was used for at least one stream."}</div>` : ""}
+            ${data.wind_purple_agreement_gate_applied ? `<div class="popup-note">${currentLanguage === "sr" ? "Кандидат за љубичасти ниво није имао довољну подршку свих активних модела; примењен је multimodel agreement gate." : "The purple-level candidate lacked sufficient support from all active models; the multimodel agreement gate was applied."}</div>` : ""}
             <div class="popup-note">
-                ${currentLanguage === "sr"
-                    ? "MeteoRisk развојни производ: вероватноће су једнако тежински комбиноване по моделу (50:50 када су оба доступна), а не спајањем 31 GEFS + 40 ICON чланова. Физички прагови удара су 17 / 20 / 25 / 32 m/s. Производ није калибрисан и није званично упозорење."
-                    : "MeteoRisk developmental product: probabilities use equal model weights (50:50 when both are available), not pooled 31 GEFS + 40 ICON members. Physical gust thresholds are 17 / 20 / 25 / 32 m/s. The product is uncalibrated and is not an official warning."}
+                ${currentLanguage === "sr" ? "MeteoRisk развојни производ: вероватноће се комбинују једнаким тежинама 1/N по сваком доступном RATIFIED моделу. Физички прагови удара су 15 / 20 / 25 / 32 m/s. Производ није калибрисан и није званично упозорење." : "MeteoRisk developmental product: probabilities use equal 1/N weights across all available RATIFIED models. Physical gust thresholds are 15 / 20 / 25 / 32 m/s. The product is uncalibrated and is not an official warning."}
             </div>
         </div>
     `;
