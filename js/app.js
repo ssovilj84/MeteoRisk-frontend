@@ -9,7 +9,7 @@ const FORECAST_HOURS =
     );
 
 const GEOMETRY_FILE =
-    "data/static/municipalities_web.geojson";
+    window.MeteoRiskConfig.adminPath;
 
 const HAZARD_INFO_FILE =
     "data/hazard_info.json";
@@ -17,7 +17,8 @@ const HAZARD_INFO_FILE =
 const GEFS_DIR =
     "data/gefs";
 
-const METEORISK_TIME_ZONE = "Europe/Belgrade";
+const METEORISK_TIME_ZONE =
+    window.MeteoRiskConfig.country.timezone;
 
 /*
    Europe/Belgrade is an IANA time-zone identifier, not a fixed UTC offset.
@@ -706,32 +707,12 @@ const translations = {
    switch center/zoom/bounds without rewriting map logic.
 */
 const MAP_VIEW_CONFIG = Object.freeze({
-    countryCode: "RS",
-
-    center: [
-        44.0,
-        20.8
-    ],
-
-    initialZoom: 7,
-
-    /*
-       Zoom 6 still shows Serbia together with neighbouring countries,
-       but prevents zooming out to a continent/world overview.
-    */
-    minZoom: 6,
-
-    maxZoom: 19,
-
-    /*
-       Navigation envelope: Serbia + wider immediate surroundings.
-       These are UI navigation bounds only; they do not change forecast data.
-    */
-    maxBounds: [
-        [39.0, 14.0],
-        [49.5, 27.5]
-    ],
-
+    countryCode: window.MeteoRiskConfig.countryCode,
+    center: window.MeteoRiskConfig.mapCenter,
+    initialZoom: window.MeteoRiskConfig.initialZoom,
+    minZoom: window.MeteoRiskConfig.minZoom,
+    maxZoom: window.MeteoRiskConfig.maxZoom,
+    maxBounds: window.MeteoRiskConfig.mapBounds,
     municipalitySearchMaxZoom: 11,
     geolocationZoom: 10
 });
@@ -900,24 +881,9 @@ function getMunicipalityData(
 function municipalityName(
     properties
 ) {
-
-    if (
-        currentLanguage === "sr"
-    ) {
-
-        return (
-            properties.Value_sc
-            || properties.Value_sl
-            || properties.Value_e
-            || "—"
-        );
-    }
-
-    return (
-        properties.Value_e
-        || properties.Value_sl
-        || properties.Value_sc
-        || "—"
+    return window.MeteoRiskConfig.adminUnitName(
+        properties,
+        currentLanguage
     );
 }
 
