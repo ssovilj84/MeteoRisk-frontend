@@ -13,13 +13,23 @@
    Future hazards should be separate files in js/hazards/.
    ============================================================ */
 
-const TEMPERATURE_FILES = [
-    "data/temperature/temperature_day0.csv",
-    "data/temperature/temperature_day1.csv",
-    "data/temperature/temperature_day2.csv",
-    "data/temperature/temperature_day3.csv",
-    "data/temperature/temperature_day4.csv"
+const TEMPERATURE_ARTIFACTS = [
+    "temperature_day0.csv",
+    "temperature_day1.csv",
+    "temperature_day2.csv",
+    "temperature_day3.csv",
+    "temperature_day4.csv"
 ];
+
+let temperatureRunPromise = null;
+
+function resolveTemperatureRun() {
+    if (!temperatureRunPromise) {
+        temperatureRunPromise =
+            window.MeteoRiskPublicData.resolveCurrentRun("temperature_5day");
+    }
+    return temperatureRunPromise;
+}
 
 let temperatureDailyCache = null;
 
@@ -55,8 +65,22 @@ async function loadTemperatureDailyRows() {
     }
 
     const byDate = new Map();
+    let resolvedRun;
 
-    for (const path of TEMPERATURE_FILES) {
+    try {
+        resolvedRun = await resolveTemperatureRun();
+    } catch (error) {
+        console.warn("Temperature run unavailable:", error);
+        temperatureDailyCache = byDate;
+        return temperatureDailyCache;
+    }
+
+    for (const artifact of TEMPERATURE_ARTIFACTS) {
+        const path =
+            window.MeteoRiskPublicData.artifactPath(
+                resolvedRun,
+                artifact
+            );
         try {
             const response = await fetch(
                 path,
@@ -320,13 +344,23 @@ function temperatureDetailHtml(data, options = {}) {
 let heatStress24hCache = new Map();
 let heatStressReferenceRun = null;
 
-const HEAT_STRESS_FILES = [
-    "data/heat_stress/heat_stress_day0.csv",
-    "data/heat_stress/heat_stress_day1.csv",
-    "data/heat_stress/heat_stress_day2.csv",
-    "data/heat_stress/heat_stress_day3.csv",
-    "data/heat_stress/heat_stress_day4.csv"
+const HEAT_STRESS_ARTIFACTS = [
+    "heat_stress_day0.csv",
+    "heat_stress_day1.csv",
+    "heat_stress_day2.csv",
+    "heat_stress_day3.csv",
+    "heat_stress_day4.csv"
 ];
+
+let heatStress5dayRunPromise = null;
+
+function resolveHeatStress5dayRun() {
+    if (!heatStress5dayRunPromise) {
+        heatStress5dayRunPromise =
+            window.MeteoRiskPublicData.resolveCurrentRun("heat_stress_5day");
+    }
+    return heatStress5dayRunPromise;
+}
 
 let heatStressDailyCache = null;
 
@@ -334,8 +368,22 @@ async function loadHeatStressDailyRows() {
     if (heatStressDailyCache) return heatStressDailyCache;
 
     const byDate = new Map();
+    let resolvedRun;
 
-    for (const path of HEAT_STRESS_FILES) {
+    try {
+        resolvedRun = await resolveHeatStress5dayRun();
+    } catch (error) {
+        console.warn("Daily heat-stress run unavailable:", error);
+        heatStressDailyCache = byDate;
+        return heatStressDailyCache;
+    }
+
+    for (const artifact of HEAT_STRESS_ARTIFACTS) {
+        const path =
+            window.MeteoRiskPublicData.artifactPath(
+                resolvedRun,
+                artifact
+            );
         try {
             const response = await fetch(
                 path,
@@ -500,11 +548,23 @@ async function applyHeatStressOverlay(data) {
 }
 
 
-function heatStress3hFile(hour) {
-    return (
-        "data/thermal_stress_24h/thermal_stress_f"
-        + String(hour).padStart(3, "0")
-        + ".csv"
+let thermalStress24hRunPromise = null;
+
+function resolveThermalStress24hRun() {
+    if (!thermalStress24hRunPromise) {
+        thermalStress24hRunPromise =
+            window.MeteoRiskPublicData.resolveCurrentRun("thermal_stress_24h");
+    }
+    return thermalStress24hRunPromise;
+}
+
+async function heatStress3hFile(hour) {
+    const resolvedRun = await resolveThermalStress24hRun();
+    return window.MeteoRiskPublicData.artifactPath(
+        resolvedRun,
+        "thermal_stress_f"
+            + String(hour).padStart(3, "0")
+            + ".csv"
     );
 }
 
@@ -513,7 +573,7 @@ async function ensureHeatStressReferenceRun() {
 
     try {
         const response = await fetch(
-            heatStress3hFile(3),
+            await heatStress3hFile(3),
             { cache: "no-store" }
         );
 
@@ -587,7 +647,7 @@ async function loadHeatStress3hRows(hour) {
         return heatStress24hCache.get(h);
     }
 
-    const path = heatStress3hFile(h);
+    const path = await heatStress3hFile(h);
 
     try {
         const response = await fetch(

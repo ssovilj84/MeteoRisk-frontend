@@ -8052,35 +8052,29 @@ async function discoverLatestProductRun() {
         }
     }
 
-    /* Temperature daily CSV contains the actual model_run. */
-    try {
-        const response = await fetch(
-            "data/temperature/temperature_day0.csv",
-            { cache: "no-store" }
-        );
-
-        if (response.ok) {
-            const rows = parseCsv(
-                await response.text()
+    function publicRunIdDate(runId) {
+        const match =
+            /^(\d{4})(\d{2})(\d{2})_(\d{2})$/.exec(
+                String(runId || "")
             );
+        if (!match) return null;
+        const d = new Date(
+            Date.UTC(
+                Number(match[1]),
+                Number(match[2]) - 1,
+                Number(match[3]),
+                Number(match[4])
+            )
+        );
+        return Number.isFinite(d.getTime()) ? d : null;
+    }
 
-            const runText =
-                rows.length
-                ? rows[0].model_run
-                : null;
-
-            const d =
-                runText
-                ? new Date(runText)
-                : null;
-
-            if (
-                d
-                && Number.isFinite(d.getTime())
-            ) {
-                candidates.push(d);
-            }
-        }
+    /* Canonical B5 pointers carry the authoritative model-run identity. */
+    try {
+        const resolved =
+            await window.MeteoRiskPublicData.resolveCurrentRun("temperature_5day");
+        const d = publicRunIdDate(resolved.pointer.current_run);
+        if (d) candidates.push(d);
     } catch (error) {
         console.warn(
             "Temperature run could not be discovered.",
@@ -8088,41 +8082,11 @@ async function discoverLatestProductRun() {
         );
     }
 
-    /* 24h thermal stress: f003 valid time minus 3 h = model run. */
     try {
-        const response = await fetch(
-            "data/thermal_stress_24h/thermal_stress_f003.csv",
-            { cache: "no-store" }
-        );
-
-        if (response.ok) {
-            const rows = parseCsv(
-                await response.text()
-            );
-
-            if (
-                rows.length
-                && rows[0].valid_time
-            ) {
-                const valid =
-                    new Date(
-                        rows[0].valid_time
-                    );
-
-                if (
-                    Number.isFinite(
-                        valid.getTime()
-                    )
-                ) {
-                    candidates.push(
-                        new Date(
-                            valid.getTime()
-                            - 3 * 60 * 60 * 1000
-                        )
-                    );
-                }
-            }
-        }
+        const resolved =
+            await window.MeteoRiskPublicData.resolveCurrentRun("thermal_stress_24h");
+        const d = publicRunIdDate(resolved.pointer.current_run);
+        if (d) candidates.push(d);
     } catch (error) {
         console.warn(
             "Thermal-stress run could not be discovered.",
