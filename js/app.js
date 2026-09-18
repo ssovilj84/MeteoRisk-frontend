@@ -199,15 +199,12 @@ const HAZARD_MODULES = {
 
     fire: {
         labelElementId: "fire-group-label",
-        parameters: ["fire_fwi", "fire_hdw"],
+        parameters: ["fire_hdw"],
         available: () => Boolean(
             currentModelData
             && currentModelData.fire_available
         ),
-        riskLevel: data => Math.max(
-            fireFwiRiskLevel(data),
-            fireHdwRiskLevel(data)
-        )
+        riskLevel: data => fireHdwRiskLevel(data)
     },
 
     air_quality: {
@@ -258,7 +255,7 @@ function moduleDataAvailable(data, moduleKey) {
     }
 
     if (moduleKey === "fire") {
-        return Boolean(data.fire_fwi_available || data.fire_hdw_available);
+        return Boolean(data.fire_hdw_available);
     }
 
     if (moduleKey === "air_quality") {
@@ -4915,7 +4912,7 @@ async function loadForecast(
         await applyFireOverlay(data);
         await applyEnvironmentOverlay(data);
 
-        data.fire_available = Boolean(data.fire_fwi_available || data.fire_hdw_available);
+        data.fire_available = Boolean(data.fire_hdw_available);
 
         currentModelData =
             data;
@@ -6348,10 +6345,6 @@ function overviewDayRisk(forecasts, municipalityID, dateKey) {
                     municipality.heat_stress_color
                 )
             );
-        }
-
-        if (municipality.fire_fwi_available) {
-            strongest = Math.max(strongest, fireFwiRiskLevel(municipality));
         }
 
         if (municipality.fire_hdw_available) {
