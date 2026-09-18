@@ -3,8 +3,8 @@
    ============================================================
 
    Shared backend products:
-     data/air_quality/air_quality_3h.csv
-     data/uv/uv_3h.csv
+     B5 product air_quality_3h via validated current.json
+     B5 product uv_3h via validated current.json
 
    Architecture:
    - MeteoRisk timeline remains the ONLY valid-time authority.
@@ -18,11 +18,26 @@
      already aggregated by the backend.
    ============================================================ */
 
-const AIR_QUALITY_FILE = "data/air_quality/air_quality_3h.csv";
-const UV_FILE = "data/uv/uv_3h.csv";
-
+let airQualityRunPromise = null;
+let uvRunPromise = null;
 let environmentAirCache = null;
 let environmentUvCache = null;
+
+function resolveAirQualityRun() {
+    if (!airQualityRunPromise) {
+        airQualityRunPromise =
+            window.MeteoRiskPublicData.resolveCurrentRun("air_quality_3h");
+    }
+    return airQualityRunPromise;
+}
+
+function resolveUvRun() {
+    if (!uvRunPromise) {
+        uvRunPromise =
+            window.MeteoRiskPublicData.resolveCurrentRun("uv_3h");
+    }
+    return uvRunPromise;
+}
 
 function environmentTimeKey(value) {
     if (!value) return "";
@@ -34,7 +49,11 @@ function environmentRowKey(validTime, municipalityName) {
     return `${environmentTimeKey(validTime)}|${normalizeMunicipalityName(municipalityName)}`;
 }
 
-async function loadEnvironmentCsv(path) {
+async function loadEnvironmentCsv(resolvedRun, artifactName) {
+    const path = window.MeteoRiskPublicData.artifactPath(
+        resolvedRun,
+        artifactName
+    );
     const response = await fetch(path, { cache: "no-store" });
     if (!response.ok) {
         console.warn("Environment file unavailable:", path, response.status);
@@ -55,14 +74,32 @@ async function loadEnvironmentCsv(path) {
 
 async function loadAirQualityRows() {
     if (!environmentAirCache) {
-        environmentAirCache = await loadEnvironmentCsv(AIR_QUALITY_FILE);
+        try {
+            const resolvedRun = await resolveAirQualityRun();
+            environmentAirCache = await loadEnvironmentCsv(
+                resolvedRun,
+                "air_quality_3h.csv"
+            );
+        } catch (error) {
+            console.warn("Air-quality run unavailable:", error);
+            environmentAirCache = new Map();
+        }
     }
     return environmentAirCache;
 }
 
 async function loadUvRows() {
     if (!environmentUvCache) {
-        environmentUvCache = await loadEnvironmentCsv(UV_FILE);
+        try {
+            const resolvedRun = await resolveUvRun();
+            environmentUvCache = await loadEnvironmentCsv(
+                resolvedRun,
+                "uv_3h.csv"
+            );
+        } catch (error) {
+            console.warn("UV run unavailable:", error);
+            environmentUvCache = new Map();
+        }
     }
     return environmentUvCache;
 }
