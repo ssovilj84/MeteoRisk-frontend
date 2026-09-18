@@ -21,12 +21,11 @@ const METEORISK_TIME_ZONE =
     window.MeteoRiskConfig.country.timezone;
 
 /*
-   Europe/Belgrade is an IANA time-zone identifier, not a fixed UTC offset.
-   Intl.DateTimeFormat therefore applies CET/CEST automatically.
+   The configured country timezone is an IANA identifier, not a fixed UTC offset.
+   Intl.DateTimeFormat therefore applies the relevant standard/daylight offsets.
 
-   Self-check below guards both 2026 DST transitions:
-   spring: +01 -> +02
-   autumn: +02 -> +01
+   Self-check below guards both 2026 DST transitions generically:
+   spring offset increases by 60 minutes; autumn decreases by 60 minutes.
 */
 function meteoriskTimeZoneOffsetMinutes(isoString) {
     const date = new Date(isoString);
@@ -89,10 +88,14 @@ function meteoriskDstSelfCheck() {
     };
 
     const ok = (
-        offsets.springBefore === 60
-        && offsets.springAfter === 120
-        && offsets.autumnBefore === 120
-        && offsets.autumnAfter === 60
+        Number.isFinite(offsets.springBefore)
+        && Number.isFinite(offsets.springAfter)
+        && Number.isFinite(offsets.autumnBefore)
+        && Number.isFinite(offsets.autumnAfter)
+        && offsets.springAfter === offsets.springBefore + 60
+        && offsets.autumnAfter === offsets.autumnBefore - 60
+        && offsets.springBefore === offsets.autumnAfter
+        && offsets.springAfter === offsets.autumnBefore
     );
 
     if (ok) {
@@ -816,10 +819,7 @@ async function initialForecastIndexFromCurrentTime() {
 
 
 function municipalityId(properties) {
-
-    return String(
-        properties.Municipality_DOM_ID
-    );
+    return window.MeteoRiskConfig.adminUnitId(properties);
 }
 
 
@@ -1774,17 +1774,8 @@ async function applyMultimodelStormsOverlay(
    ============================================================ */
 
 function localTodayKey() {
-    return localDateKeyBelgrade(
+    return window.MeteoRiskConfig.localDateKey(
         new Date().toISOString()
-    );
-}
-
-
-function startOfLocalToday() {
-    const today = localTodayKey();
-
-    return new Date(
-        today + "T00:00:00+02:00"
     );
 }
 
@@ -2035,7 +2026,7 @@ async function buildTimelineSlots() {
     ) {
         const date = new Date(ms);
         const localDate =
-            localDateKeyBelgrade(
+            window.MeteoRiskConfig.localDateKey(
                 date.toISOString()
             );
 
@@ -2487,7 +2478,7 @@ async function showTimelineSlot(index) {
         && document.getElementById("overview-panel").classList.contains("open")
     ) {
         overviewSelectedDate =
-            localDateKeyBelgrade(
+            window.MeteoRiskConfig.localDateKey(
                 currentModelData.valid_time
             );
 
@@ -4223,7 +4214,7 @@ function popupContentCore(
 
             <div class="popup-valid">
                 ${currentLanguage === "sr" ? "Дневна прогноза" : "Daily forecast"}:
-                ${data.temperature_date || localDateKeyBelgrade(currentModelData?.valid_time) || "—"}
+                ${data.temperature_date || window.MeteoRiskConfig.localDateKey(currentModelData?.valid_time) || "—"}
             </div>
 
             ${temperatureDetailHtml(data)}
@@ -4247,7 +4238,7 @@ function popupContentCore(
                     return new Intl.DateTimeFormat(
                         currentLanguage === "sr" ? "sr-RS" : "en-GB",
                         {
-                            timeZone: "Europe/Belgrade",
+                            timeZone: METEORISK_TIME_ZONE,
                             day: "2-digit",
                             month: "2-digit",
                             year: "numeric",
@@ -4267,7 +4258,7 @@ function popupContentCore(
             <div class="popup-title">${name}</div>
             <div class="popup-valid">
                 ${currentLanguage === "sr" ? "Дневна прогноза" : "Daily forecast"}:
-                ${data.fire_fwi_date || localDateKeyBelgrade(currentModelData?.valid_time) || "—"}
+                ${data.fire_fwi_date || window.MeteoRiskConfig.localDateKey(currentModelData?.valid_time) || "—"}
             </div>
             ${fireFwiDetailHtml(data)}
         `;
@@ -5536,10 +5527,10 @@ function overviewWindowIntersectsSelectedDate(
     }
 
     const startKey =
-        localDateKeyBelgrade(startIso);
+        window.MeteoRiskConfig.localDateKey(startIso);
 
     const endKey =
-        localDateKeyBelgrade(endIso);
+        window.MeteoRiskConfig.localDateKey(endIso);
 
     if (!startKey || !endKey) {
         return false;
@@ -5589,10 +5580,10 @@ function formatOverviewInterval(
     }
 
     const startKey =
-        localDateKeyBelgrade(startIso);
+        window.MeteoRiskConfig.localDateKey(startIso);
 
     const endKey =
-        localDateKeyBelgrade(endIso);
+        window.MeteoRiskConfig.localDateKey(endIso);
 
     const locale =
         currentLanguage === "sr"
@@ -5897,7 +5888,7 @@ function stormOverviewGroupHtml(
 
         forecasts.forEach(forecast => {
             if (
-                localDateKeyBelgrade(
+                window.MeteoRiskConfig.localDateKey(
                     forecast.valid_time
                 ) !== overviewSelectedDate
             ) {
@@ -6007,7 +5998,7 @@ function overviewDayRisk(forecasts, municipalityID, dateKey) {
     const windLevel = {green:0, yellow:1, orange:2, red:3, purple:4};
 
     forecasts.forEach(forecast => {
-        if (localDateKeyBelgrade(forecast.valid_time) !== dateKey) return;
+        if (window.MeteoRiskConfig.localDateKey(forecast.valid_time) !== dateKey) return;
         const municipality = forecast.municipalities[municipalityID];
         if (!municipality) return;
 
@@ -6105,7 +6096,7 @@ function overviewCalendarsHtml(
             timelineSlots
                 .map(
                     slot =>
-                        localDateKeyBelgrade(
+                        window.MeteoRiskConfig.localDateKey(
                             slot.valid_time
                         )
                 )
@@ -6363,7 +6354,7 @@ function heatStressOverviewItemHtml(
             significant
                 .filter(
                     item =>
-                        localDateKeyBelgrade(
+                        window.MeteoRiskConfig.localDateKey(
                             item.forecast.valid_time
                         ) === overviewSelectedDate
                 )
@@ -6478,7 +6469,7 @@ function temperatureOverviewGroupHtml(
 
     forecasts.forEach(forecast => {
         const dateKey =
-            localDateKeyBelgrade(
+            window.MeteoRiskConfig.localDateKey(
                 forecast.valid_time
             );
 
@@ -6633,7 +6624,7 @@ function renderOverview(forecasts, feature) {
         overviewSelectedDate
         ? visibleForecasts.filter(
             forecast =>
-                localDateKeyBelgrade(
+                window.MeteoRiskConfig.localDateKey(
                     forecast.valid_time
                 ) === overviewSelectedDate
         )
@@ -6754,7 +6745,7 @@ function renderOverview(forecasts, feature) {
                         (slot, index) => ({
                             index,
                             dateKey:
-                                localDateKeyBelgrade(
+                                window.MeteoRiskConfig.localDateKey(
                                     slot.valid_time
                                 ),
                             time:
@@ -6812,7 +6803,7 @@ async function openFiveDayOverview(feature) {
 
     overviewSelectedDate =
         currentModelData && currentModelData.valid_time
-        ? localDateKeyBelgrade(
+        ? window.MeteoRiskConfig.localDateKey(
             currentModelData.valid_time
         )
         : null;
@@ -7005,11 +6996,10 @@ function findMunicipalities(
                     feature.properties;
 
                 const names =
-                    [
-                        p.Value_sc,
-                        p.Value_sl,
-                        p.Value_e
-                    ]
+                    Object.values(
+                        window.MeteoRiskConfig.country.name_columns || {}
+                    )
+                    .map(column => p[column])
                     .filter(
                         Boolean
                     )

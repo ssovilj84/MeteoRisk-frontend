@@ -127,7 +127,7 @@ async function loadFireHdwRows(hour) {
         }
 
         rows.forEach(row => {
-            const name = normalizeMunicipalityName(row.Value_sc);
+            const name = normalizeMunicipalityName(window.MeteoRiskConfig.adminUnitMatchName(row));
             if (name) byName.set(name, row);
         });
     } catch (error) {
@@ -188,7 +188,7 @@ async function applyFireOverlay(
     geometryData.features.forEach(feature => {
         const properties = feature.properties || {};
         const name = normalizeMunicipalityName(
-            properties.Value_sc || properties.Value_sl || properties.Value_e
+            window.MeteoRiskConfig.adminUnitMatchName(properties)
         );
         const id = municipalityId(properties);
         const target = data.municipalities?.[id];
@@ -434,7 +434,7 @@ function fireOverviewGroupHtml(forecasts, municipalityID) {
 
     const relevant = forecasts.filter(forecast => {
         if (!overviewSelectedDate) return true;
-        return localDateKeyBelgrade(forecast.valid_time) === overviewSelectedDate;
+        return window.MeteoRiskConfig.localDateKey(forecast.valid_time) === overviewSelectedDate;
     });
 
     const fwiByDate = new Map();
@@ -444,7 +444,7 @@ function fireOverviewGroupHtml(forecasts, municipalityID) {
         const data = forecast.municipalities?.[municipalityID];
         if (!data) return;
 
-        const dateKey = localDateKeyBelgrade(forecast.valid_time);
+        const dateKey = window.MeteoRiskConfig.localDateKey(forecast.valid_time);
 
         if (
             data.fire_fwi_available

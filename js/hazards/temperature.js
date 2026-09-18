@@ -33,32 +33,6 @@ function resolveTemperatureRun() {
 
 let temperatureDailyCache = null;
 
-function localDateKeyBelgrade(isoString) {
-    if (!isoString) return null;
-
-    const date = new Date(isoString);
-    if (!Number.isFinite(date.getTime())) return null;
-
-    const parts = new Intl.DateTimeFormat(
-        "en-CA",
-        {
-            timeZone: "Europe/Belgrade",
-            year: "numeric",
-            month: "2-digit",
-            day: "2-digit"
-        }
-    ).formatToParts(date);
-
-    const values = {};
-    parts.forEach(part => {
-        if (part.type !== "literal") {
-            values[part.type] = part.value;
-        }
-    });
-
-    return `${values.year}-${values.month}-${values.day}`;
-}
-
 async function loadTemperatureDailyRows() {
     if (temperatureDailyCache) {
         return temperatureDailyCache;
@@ -109,7 +83,7 @@ async function loadTemperatureDailyRows() {
                 }
 
                 byDate.get(dateKey).set(
-                    normalizeMunicipalityName(row.Value_sc),
+                    normalizeMunicipalityName(window.MeteoRiskConfig.adminUnitMatchName(row)),
                     row
                 );
             });
@@ -130,7 +104,7 @@ async function loadTemperatureDailyRows() {
 async function applyTemperatureOverlay(data) {
     if (!data || !geometryData) return data;
 
-    const dateKey = localDateKeyBelgrade(
+    const dateKey = window.MeteoRiskConfig.localDateKey(
         data.valid_time
     );
 
@@ -157,9 +131,7 @@ async function applyTemperatureOverlay(data) {
         const properties = feature.properties || {};
 
         const name = normalizeMunicipalityName(
-            properties.Value_sc
-            || properties.Value_sl
-            || properties.Value_e
+            window.MeteoRiskConfig.adminUnitMatchName(properties)
         );
 
         const row = rowsByName.get(name);
@@ -418,9 +390,7 @@ async function loadHeatStressDailyRows() {
 
                 byDate.get(dateKey).set(
                     normalizeMunicipalityName(
-                        row.Value_sc
-                        || row.Value_sl
-                        || row.Value_e
+                        window.MeteoRiskConfig.adminUnitMatchName(row)
                     ),
                     row
                 );
@@ -443,7 +413,7 @@ async function applyHeatStressOverlay(data) {
     if (!data || !geometryData) return data;
 
     const dateKey =
-        localDateKeyBelgrade(
+        window.MeteoRiskConfig.localDateKey(
             data.valid_time
         );
 
@@ -473,9 +443,7 @@ async function applyHeatStressOverlay(data) {
 
         const name =
             normalizeMunicipalityName(
-                properties.Value_sc
-                || properties.Value_sl
-                || properties.Value_e
+                window.MeteoRiskConfig.adminUnitMatchName(properties)
             );
 
         const row =
@@ -671,9 +639,7 @@ async function loadHeatStress3hRows(hour) {
         rows.forEach(row => {
             byName.set(
                 normalizeMunicipalityName(
-                    row.Value_sc
-                    || row.Value_sl
-                    || row.Value_e
+                    window.MeteoRiskConfig.adminUnitMatchName(row)
                 ),
                 row
             );
@@ -769,9 +735,7 @@ async function applyHeatStressTimelineOverlay(data) {
         const properties = feature.properties || {};
 
         const name = normalizeMunicipalityName(
-            properties.Value_sc
-            || properties.Value_sl
-            || properties.Value_e
+            window.MeteoRiskConfig.adminUnitMatchName(properties)
         );
 
         const row = rowsByName.get(name);

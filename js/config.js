@@ -27,6 +27,40 @@
         return "—";
     }
 
+    function adminUnitId(properties) {
+        const source = properties || {};
+        const value = source[country.id_column];
+        return value === null || value === undefined ? "" : String(value).trim();
+    }
+
+    function adminUnitMatchName(properties) {
+        const source = properties || {};
+        const names = country.name_columns || {};
+        const columns = [names.local_cyrillic, names.local, names.local_latin, names.en];
+        for (const column of columns.filter(Boolean)) {
+            const value = source[column];
+            if (value !== null && value !== undefined && String(value).trim()) return String(value).trim();
+        }
+        return "";
+    }
+
+    function localDateKey(isoString) {
+        if (!isoString) return null;
+        const date = new Date(isoString);
+        if (!Number.isFinite(date.getTime())) return null;
+        const parts = new Intl.DateTimeFormat("en-CA", {
+            timeZone: country.timezone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit"
+        }).formatToParts(date);
+        const values = {};
+        parts.forEach(part => {
+            if (part.type !== "literal") values[part.type] = part.value;
+        });
+        return `${values.year}-${values.month}-${values.day}`;
+    }
+
     const bounds = country.geometry_bounds;
     if (!Array.isArray(bounds) || bounds.length !== 4) throw new Error("Invalid geometry bounds for " + countryCode);
     const mapBounds = Object.freeze([
@@ -45,6 +79,9 @@
         dataPath,
         adminPath: country.public_admin_file,
         adminUnitName,
+        adminUnitId,
+        adminUnitMatchName,
+        localDateKey,
         mapBounds,
         mapCenter,
         initialZoom,

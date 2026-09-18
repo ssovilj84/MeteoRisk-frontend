@@ -64,7 +64,7 @@ async function loadEnvironmentCsv(resolvedRun, artifactName) {
     const byKey = new Map();
 
     rows.forEach(row => {
-        const name = row.Value_sc || row.Value_sl || row.Value_e || "";
+        const name = window.MeteoRiskConfig.adminUnitMatchName(row) || "";
         const key = environmentRowKey(row.valid_time, name);
         if (key && !key.startsWith("|")) byKey.set(key, row);
     });
@@ -154,7 +154,7 @@ async function applyEnvironmentOverlay(data) {
 
     geometryData.features.forEach(feature => {
         const p = feature.properties || {};
-        const name = p.Value_sc || p.Value_sl || p.Value_e || "";
+        const name = window.MeteoRiskConfig.adminUnitMatchName(p) || "";
         const id = municipalityId(p);
         const target = data.municipalities?.[id];
         if (!target) return;
