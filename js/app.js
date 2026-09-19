@@ -7940,7 +7940,6 @@ function updateLanguage() {
     document.getElementById("temperature-group-label").textContent = t.temperatureGroup;
     document.getElementById("btn-max-temperature").textContent = t.maxTemperature;
     document.getElementById("fire-group-label").textContent = t.fireGroup;
-    document.getElementById("btn-fire-fwi").textContent = t.fireDanger;
     document.getElementById("btn-fire-hdw").textContent = t.fireSpread;
     document.getElementById("air-quality-group-label").textContent = t.airQualityGroup;
     document.getElementById("btn-air-pm25").textContent = t.airPm25;

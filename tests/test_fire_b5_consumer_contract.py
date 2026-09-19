@@ -31,3 +31,8 @@ def test_fire_availability_is_hdw_only():
     assert "return Boolean(data.fire_hdw_available);" in APP
     assert "Boolean(data.fire_fwi_available || data.fire_hdw_available)" not in APP
     assert "if (municipality.fire_fwi_available)" not in APP
+
+
+def test_retired_fire_fwi_button_is_not_referenced_by_app_js():
+    app = (Path(__file__).resolve().parents[1] / "js" / "app.js").read_text(encoding="utf-8")
+    assert "btn-fire-fwi" not in app

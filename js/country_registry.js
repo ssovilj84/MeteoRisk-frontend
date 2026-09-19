@@ -29,8 +29,8 @@ window.METEORISK_COUNTRY_REGISTRY = Object.freeze({
         46.6
       ],
       "admin_unit_label": "municipality",
-      "public_admin_file": "data/static/municipalities_web.geojson",
-      "data_root": "data"
+      "public_admin_file": "data/countries/RS/static/municipalities_web.geojson",
+      "data_root": "data/countries/RS"
     },
     "HR": {
       "code": "HR",

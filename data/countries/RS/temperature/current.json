@@ -1,0 +1,7 @@
+{
+  "schema": "meteorisk.public_run_pointer.v1",
+  "product_id": "temperature_5day",
+  "country_code": "RS",
+  "current_run": "20260918_00",
+  "run_path": "runs/20260918_00"
+}
