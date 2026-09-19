@@ -11,14 +11,14 @@
 
    Data contracts expected by the frontend:
 
-   data/fire/fwi_day0.csv ... fwi_day4.csv
+   fire_fwi is RETIRED in the public product registry and is not loaded by this frontend
      date,Value_sc,fwi,fwi_effis_class_id,fwi_effis_class,fwi_range,fwi_color,source,model_run
 
    The public operational EFFIS WMS is categorical. `fwi` may therefore be
    blank; the authoritative fields are fwi_effis_class(_id), fwi_range and
    fwi_color. Numeric FWI must never be reconstructed from rendered colours.
 
-   data/fire/hdw_f003.csv ... hdw_f120.csv
+   B5 fire_hdw immutable artifacts hdw_f003.csv ... hdw_f120.csv
      valid_time,Value_sc,hdw,hdw_percentile,hdw_color,source,model_run
 
    Color fields use: GREEN / YELLOW / ORANGE / RED / PURPLE.
@@ -35,22 +35,31 @@
    this frontend module.
    ============================================================ */
 
-const FIRE_FWI_FILES = [
-    "data/fire/fwi_day0.csv",
-    "data/fire/fwi_day1.csv",
-    "data/fire/fwi_day2.csv",
-    "data/fire/fwi_day3.csv",
-    "data/fire/fwi_day4.csv"
-];
-
 const FIRE_HDW_HOURS =
     Array.from({ length: 40 }, (_, i) => (i + 1) * 3);
 
-let fireFwiDailyCache = null;
+let fireHdwRunPromise = null;
 let fireHdwCache = {};
 
-function fireHdwFile(hour) {
-    return `data/fire/hdw_f${String(hour).padStart(3, "0")}.csv`;
+function resolveFireHdwRun() {
+    if (!fireHdwRunPromise) {
+        fireHdwRunPromise =
+            window.MeteoRiskPublicData.resolveCurrentRun("fire_hdw");
+    }
+    return fireHdwRunPromise;
+}
+
+function fireRunIdFromModelRun(value) {
+    if (!value) return "";
+    const d = new Date(value);
+    if (!Number.isFinite(d.getTime())) return "";
+    return (
+        String(d.getUTCFullYear()).padStart(4, "0")
+        + String(d.getUTCMonth() + 1).padStart(2, "0")
+        + String(d.getUTCDate()).padStart(2, "0")
+        + "_"
+        + String(d.getUTCHours()).padStart(2, "0")
+    );
 }
 
 function fireColorFromFwi(value) {
@@ -85,46 +94,20 @@ function fireColorHex(color) {
     return colors[String(color || "").toUpperCase()] || "#c7c7c7";
 }
 
-async function loadFireFwiDailyRows() {
-    if (fireFwiDailyCache) return fireFwiDailyCache;
-
-    const byDate = new Map();
-
-    for (const path of FIRE_FWI_FILES) {
-        try {
-            const response = await fetch(path, { cache: "no-store" });
-            if (!response.ok) {
-                console.warn("FWI file unavailable:", path, response.status);
-                continue;
-            }
-
-            const rows = parseCsv(await response.text());
-
-            rows.forEach(row => {
-                const dateKey = String(row.date || "").trim();
-                const name = normalizeMunicipalityName(row.Value_sc);
-                if (!dateKey || !name) return;
-
-                if (!byDate.has(dateKey)) byDate.set(dateKey, new Map());
-                byDate.get(dateKey).set(name, row);
-            });
-        } catch (error) {
-            console.warn("FWI file load error:", path, error);
-        }
-    }
-
-    fireFwiDailyCache = byDate;
-    return byDate;
-}
-
 async function loadFireHdwRows(hour) {
     if (!FIRE_HDW_HOURS.includes(hour)) return new Map();
     if (fireHdwCache[hour]) return fireHdwCache[hour];
 
     const byName = new Map();
-    const path = fireHdwFile(hour);
 
     try {
+        const resolvedRun = await resolveFireHdwRun();
+        const artifact =
+            "hdw_f" + String(hour).padStart(3, "0") + ".csv";
+        const path = window.MeteoRiskPublicData.artifactPath(
+            resolvedRun,
+            artifact
+        );
         const response = await fetch(path, { cache: "no-store" });
         if (!response.ok) {
             console.warn("HDW file unavailable:", path, response.status);
@@ -133,17 +116,28 @@ async function loadFireHdwRows(hour) {
         }
 
         const rows = parseCsv(await response.text());
+        const expectedRun = String(resolvedRun.pointer.current_run);
+        const validRows = rows.every(
+            row => fireRunIdFromModelRun(row.model_run) === expectedRun
+        );
+        if (!validRows) {
+            console.warn("HDW term run identity mismatch:", artifact);
+            fireHdwCache[hour] = byName;
+            return byName;
+        }
+
         rows.forEach(row => {
-            const name = normalizeMunicipalityName(row.Value_sc);
+            const name = normalizeMunicipalityName(window.MeteoRiskConfig.adminUnitMatchName(row));
             if (name) byName.set(name, row);
         });
     } catch (error) {
-        console.warn("HDW file load error:", path, error);
+        console.warn("HDW file load error:", error);
     }
 
     fireHdwCache[hour] = byName;
     return byName;
 }
+
 
 function fireLeadHourForValidTime(
     validTime,
@@ -180,19 +174,6 @@ async function applyFireOverlay(
 ) {
     if (!data || !geometryData) return data;
 
-    const dateKey =
-        localDateKeyBelgrade(
-            data.valid_time
-        );
-
-    const fwiDays =
-        await loadFireFwiDailyRows();
-
-    const fwiRows =
-        dateKey
-        ? fwiDays.get(dateKey)
-        : null;
-
     const leadHour =
         fireLeadHourForValidTime(
             data.valid_time,
@@ -202,13 +183,12 @@ async function applyFireOverlay(
         ? await loadFireHdwRows(leadHour)
         : new Map();
 
-    let fwiMatched = 0;
     let hdwMatched = 0;
 
     geometryData.features.forEach(feature => {
         const properties = feature.properties || {};
         const name = normalizeMunicipalityName(
-            properties.Value_sc || properties.Value_sl || properties.Value_e
+            window.MeteoRiskConfig.adminUnitMatchName(properties)
         );
         const id = municipalityId(properties);
         const target = data.municipalities?.[id];
@@ -216,41 +196,6 @@ async function applyFireOverlay(
 
         target.fire_fwi_available = false;
         target.fire_hdw_available = false;
-
-        const fwiRow = fwiRows?.get(name);
-        if (fwiRow) {
-            const rawFwi = optionalNumber(fwiRow.fwi);
-            const effisClassId = optionalNumber(fwiRow.fwi_effis_class_id);
-            const effisClass = String(fwiRow.fwi_effis_class || "").trim().toUpperCase();
-            const fwiRange = String(fwiRow.fwi_range || "").trim();
-            const rowColor = String(fwiRow.fwi_color || "").trim().toUpperCase();
-
-            // Operational EFFIS WMS rows are categorical. If class/range metadata
-            // are present, they are authoritative; a numeric placeholder such as
-            // 0.0 must never be shown as a real FWI value.
-            const categoricalEffisRow = Boolean(
-                effisClass
-                || effisClassId !== null
-                || fwiRange
-            );
-            const fwi = categoricalEffisRow ? null : rawFwi;
-            const color = rowColor || (fwi !== null ? fireColorFromFwi(fwi) : "");
-
-            // Categorical EFFIS WMS rows remain valid even without numeric FWI.
-            // Missing class/color is unavailable, never green.
-            if (color && (categoricalEffisRow || fwi !== null)) {
-                target.fire_fwi_available = true;
-                target.fire_fwi = fwi;
-                target.fire_fwi_effis_class_id = effisClassId;
-                target.fire_fwi_effis_class = effisClass;
-                target.fire_fwi_range = fwiRange;
-                target.fire_fwi_color = color;
-                target.fire_fwi_date = fwiRow.date || dateKey;
-                target.fire_fwi_source = fwiRow.source || "EFFIS deterministic FWI";
-                target.fire_fwi_model_run = fwiRow.model_run || "";
-                fwiMatched += 1;
-            }
-        }
 
         const hdwRow = hdwRows.get(name);
         if (hdwRow) {
@@ -271,11 +216,11 @@ async function applyFireOverlay(
         }
     });
 
-    data.fire_fwi_matches = fwiMatched;
+    data.fire_fwi_matches = 0;
     data.fire_hdw_matches = hdwMatched;
-    data.fire_fwi_available = fwiMatched > 0;
+    data.fire_fwi_available = false;
     data.fire_hdw_available = hdwMatched > 0;
-    data.fire_available = data.fire_fwi_available || data.fire_hdw_available;
+    data.fire_available = data.fire_hdw_available;
 
     return data;
 }
@@ -489,7 +434,7 @@ function fireOverviewGroupHtml(forecasts, municipalityID) {
 
     const relevant = forecasts.filter(forecast => {
         if (!overviewSelectedDate) return true;
-        return localDateKeyBelgrade(forecast.valid_time) === overviewSelectedDate;
+        return window.MeteoRiskConfig.localDateKey(forecast.valid_time) === overviewSelectedDate;
     });
 
     const fwiByDate = new Map();
@@ -499,7 +444,7 @@ function fireOverviewGroupHtml(forecasts, municipalityID) {
         const data = forecast.municipalities?.[municipalityID];
         if (!data) return;
 
-        const dateKey = localDateKeyBelgrade(forecast.valid_time);
+        const dateKey = window.MeteoRiskConfig.localDateKey(forecast.valid_time);
 
         if (
             data.fire_fwi_available

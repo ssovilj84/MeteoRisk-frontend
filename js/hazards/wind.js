@@ -19,11 +19,19 @@
    treated as zero. Terms with fewer available RATIFIED streams are represented explicitly through Registry provenance.
    ============================================================ */
 
-const WIND_V2_MANIFEST_FILE = "data/wind/manifest.json";
-const WIND_V2_DATA_ROOT = "data/wind/";
-
+let windV2RunPromise = null;
 let windV2ManifestPromise = null;
+let windV2ResolvedRun = null;
 const windV2TermCache = new Map();
+
+
+function resolveWindV2Run() {
+    if (!windV2RunPromise) {
+        windV2RunPromise =
+            window.MeteoRiskPublicData.resolveCurrentRun("wind_v2");
+    }
+    return windV2RunPromise;
+}
 
 
 function windV2NormalizeIso(value) {
@@ -44,8 +52,12 @@ async function loadWindV2Manifest() {
 
     windV2ManifestPromise = (async () => {
         try {
+            const resolvedRun = await resolveWindV2Run();
             const response = await fetch(
-                WIND_V2_MANIFEST_FILE,
+                window.MeteoRiskPublicData.artifactPath(
+                    resolvedRun,
+                    "manifest.json"
+                ),
                 { cache: "no-store" }
             );
 
@@ -63,13 +75,38 @@ async function loadWindV2Manifest() {
                 !manifest
                 || manifest.schema !== "meteorisk_wind_v2"
                 || !Array.isArray(manifest.terms)
+                || String(manifest.run_id || "")
+                    !== String(resolvedRun.pointer.current_run)
             ) {
                 console.warn(
-                    "VETAR v2 manifest has an invalid schema."
+                    "VETAR v2 manifest has an invalid schema or run identity."
                 );
                 return null;
             }
 
+            const runPrefix =
+                resolvedRun.pointer.run_path + "/";
+            const validTerms = manifest.terms.every(term => {
+                const hour = Number(term.forecast_hour);
+                if (
+                    !Number.isInteger(hour)
+                    || hour < 0
+                ) {
+                    return false;
+                }
+                const artifact =
+                    "f" + String(term.forecast_hour).padStart(3, "0") + ".json";
+                return term.file === runPrefix + artifact;
+            });
+
+            if (!validTerms) {
+                console.warn(
+                    "VETAR v2 manifest contains a non-canonical term path."
+                );
+                return null;
+            }
+
+            windV2ResolvedRun = resolvedRun;
             manifest.byValidTime = new Map();
 
             manifest.terms.forEach(term => {
@@ -131,9 +168,21 @@ async function windV2LatestValidTime() {
 
 
 async function loadWindV2Term(term) {
-    if (!term || !term.file) return null;
+    if (!term || !Number.isInteger(Number(term.forecast_hour))) {
+        return null;
+    }
 
-    const key = String(term.file);
+    if (!windV2ResolvedRun) {
+        const manifest = await loadWindV2Manifest();
+        if (!manifest || !windV2ResolvedRun) return null;
+    }
+
+    const artifact =
+        "f" + String(term.forecast_hour).padStart(3, "0") + ".json";
+    const key =
+        windV2ResolvedRun.pointer.current_run
+        + "/"
+        + artifact;
 
     if (windV2TermCache.has(key)) {
         return windV2TermCache.get(key);
@@ -141,14 +190,17 @@ async function loadWindV2Term(term) {
 
     try {
         const response = await fetch(
-            WIND_V2_DATA_ROOT + key,
+            window.MeteoRiskPublicData.artifactPath(
+                windV2ResolvedRun,
+                artifact
+            ),
             { cache: "no-store" }
         );
 
         if (!response.ok) {
             console.warn(
                 "VETAR v2 term unavailable: "
-                + key
+                + artifact
                 + " | HTTP "
                 + response.status
             );
@@ -160,11 +212,15 @@ async function loadWindV2Term(term) {
         if (
             !payload
             || payload.schema !== "meteorisk_wind_v2_term"
+            || String(payload.run_id || "")
+                !== String(windV2ResolvedRun.pointer.current_run)
+            || Number(payload.forecast_hour)
+                !== Number(term.forecast_hour)
             || !payload.municipalities
         ) {
             console.warn(
-                "VETAR v2 term has an invalid schema: "
-                + key
+                "VETAR v2 term has an invalid schema or run identity: "
+                + artifact
             );
             return null;
         }
@@ -179,7 +235,7 @@ async function loadWindV2Term(term) {
     } catch (error) {
         console.warn(
             "VETAR v2 term could not be loaded: "
-            + key,
+            + artifact,
             error
         );
         return null;

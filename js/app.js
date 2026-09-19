@@ -9,7 +9,7 @@ const FORECAST_HOURS =
     );
 
 const GEOMETRY_FILE =
-    "data/static/municipalities_web.geojson";
+    window.MeteoRiskConfig.adminPath;
 
 const HAZARD_INFO_FILE =
     "data/hazard_info.json";
@@ -17,15 +17,15 @@ const HAZARD_INFO_FILE =
 const GEFS_DIR =
     "data/gefs";
 
-const METEORISK_TIME_ZONE = "Europe/Belgrade";
+const METEORISK_TIME_ZONE =
+    window.MeteoRiskConfig.country.timezone;
 
 /*
-   Europe/Belgrade is an IANA time-zone identifier, not a fixed UTC offset.
-   Intl.DateTimeFormat therefore applies CET/CEST automatically.
+   The configured country timezone is an IANA identifier, not a fixed UTC offset.
+   Intl.DateTimeFormat therefore applies the relevant standard/daylight offsets.
 
-   Self-check below guards both 2026 DST transitions:
-   spring: +01 -> +02
-   autumn: +02 -> +01
+   Self-check below guards both 2026 DST transitions generically:
+   spring offset increases by 60 minutes; autumn decreases by 60 minutes.
 */
 function meteoriskTimeZoneOffsetMinutes(isoString) {
     const date = new Date(isoString);
@@ -88,10 +88,14 @@ function meteoriskDstSelfCheck() {
     };
 
     const ok = (
-        offsets.springBefore === 60
-        && offsets.springAfter === 120
-        && offsets.autumnBefore === 120
-        && offsets.autumnAfter === 60
+        Number.isFinite(offsets.springBefore)
+        && Number.isFinite(offsets.springAfter)
+        && Number.isFinite(offsets.autumnBefore)
+        && Number.isFinite(offsets.autumnAfter)
+        && offsets.springAfter === offsets.springBefore + 60
+        && offsets.autumnAfter === offsets.autumnBefore - 60
+        && offsets.springBefore === offsets.autumnAfter
+        && offsets.springAfter === offsets.autumnBefore
     );
 
     if (ok) {
@@ -113,26 +117,7 @@ function meteoriskDstSelfCheck() {
 
 meteoriskDstSelfCheck();
 
-/* MeteoRisk STORMS multimodel.
-   The existing five-day frontend (+003 to +120 h) is preserved.
-   In the current development phase the final multimodel STORMS product
-   exists for the first 24 hours at 3-hour intervals. After +024 h the
-   existing GEFS products remain available until the multimodel horizon
-   is extended. */
-const MULTIMODEL_STORMS_FILES = {
-     3: "data/multimodel/storms_f003.csv",
-     6: "data/multimodel/storms_f006.csv",
-     9: "data/multimodel/storms_f009.csv",
-    12: "data/multimodel/storms_f012.csv",
-    15: "data/multimodel/storms_f015.csv",
-    18: "data/multimodel/storms_f018.csv",
-    21: "data/multimodel/storms_f021.csv",
-    24: "data/multimodel/storms_f024.csv"
-};
-
-let multimodelStormsCache = {};
-
-
+/* MeteoRisk STORM v2 uses the canonical B5 public product only. */
 
 let timelineSlots = [];
 let timelineSlotIndex = 0;
@@ -198,15 +183,12 @@ const HAZARD_MODULES = {
 
     fire: {
         labelElementId: "fire-group-label",
-        parameters: ["fire_fwi", "fire_hdw"],
+        parameters: ["fire_hdw"],
         available: () => Boolean(
             currentModelData
             && currentModelData.fire_available
         ),
-        riskLevel: data => Math.max(
-            fireFwiRiskLevel(data),
-            fireHdwRiskLevel(data)
-        )
+        riskLevel: data => fireHdwRiskLevel(data)
     },
 
     air_quality: {
@@ -257,7 +239,7 @@ function moduleDataAvailable(data, moduleKey) {
     }
 
     if (moduleKey === "fire") {
-        return Boolean(data.fire_fwi_available || data.fire_hdw_available);
+        return Boolean(data.fire_hdw_available);
     }
 
     if (moduleKey === "air_quality") {
@@ -706,32 +688,12 @@ const translations = {
    switch center/zoom/bounds without rewriting map logic.
 */
 const MAP_VIEW_CONFIG = Object.freeze({
-    countryCode: "RS",
-
-    center: [
-        44.0,
-        20.8
-    ],
-
-    initialZoom: 7,
-
-    /*
-       Zoom 6 still shows Serbia together with neighbouring countries,
-       but prevents zooming out to a continent/world overview.
-    */
-    minZoom: 6,
-
-    maxZoom: 19,
-
-    /*
-       Navigation envelope: Serbia + wider immediate surroundings.
-       These are UI navigation bounds only; they do not change forecast data.
-    */
-    maxBounds: [
-        [39.0, 14.0],
-        [49.5, 27.5]
-    ],
-
+    countryCode: window.MeteoRiskConfig.countryCode,
+    center: window.MeteoRiskConfig.mapCenter,
+    initialZoom: window.MeteoRiskConfig.initialZoom,
+    minZoom: window.MeteoRiskConfig.minZoom,
+    maxZoom: window.MeteoRiskConfig.maxZoom,
+    maxBounds: window.MeteoRiskConfig.mapBounds,
     municipalitySearchMaxZoom: 11,
     geolocationZoom: 10
 });
@@ -801,24 +763,12 @@ async function initialForecastIndexFromCurrentTime() {
     let firstValidTime = null;
 
     try {
-        const rowsByName = await loadMultimodelStormsRows(
-            FORECAST_HOURS[0]
-        );
-
-        if (rowsByName && rowsByName.size > 0) {
-            const firstRow = rowsByName.values().next().value;
-            const validText = firstRow ? firstRow.valid_time : null;
-            const parsed = validText ? new Date(validText) : null;
-
-            if (parsed && Number.isFinite(parsed.getTime())) {
-                firstValidTime = parsed;
-            }
-        }
+        const manifest = await loadStormV2ManifestDirect();
+        const firstTerm = manifest ? manifest.byHour.get(FORECAST_HOURS[0]) : null;
+        const parsed = firstTerm && firstTerm.valid_time ? new Date(firstTerm.valid_time) : null;
+        if (parsed && Number.isFinite(parsed.getTime())) firstValidTime = parsed;
     } catch (error) {
-        console.warn(
-            "Could not determine initial time from multimodel metadata.",
-            error
-        );
+        console.warn("Could not determine initial time from STORM v2 manifest.", error);
     }
 
     if (!firstValidTime) {
@@ -869,10 +819,7 @@ async function initialForecastIndexFromCurrentTime() {
 
 
 function municipalityId(properties) {
-
-    return String(
-        properties.Municipality_DOM_ID
-    );
+    return window.MeteoRiskConfig.adminUnitId(properties);
 }
 
 
@@ -900,24 +847,9 @@ function getMunicipalityData(
 function municipalityName(
     properties
 ) {
-
-    if (
-        currentLanguage === "sr"
-    ) {
-
-        return (
-            properties.Value_sc
-            || properties.Value_sl
-            || properties.Value_e
-            || "—"
-        );
-    }
-
-    return (
-        properties.Value_e
-        || properties.Value_sl
-        || properties.Value_sc
-        || "—"
+    return window.MeteoRiskConfig.adminUnitName(
+        properties,
+        currentLanguage
     );
 }
 
@@ -1364,73 +1296,34 @@ function stormHazardPrefix(hazardKey) {
     }[hazardKey] || hazardKey;
 }
 
-async function loadMultimodelStormsRows(hour) {
-    const path = MULTIMODEL_STORMS_FILES[hour];
-
-    if (!path) return null;
-
-    if (multimodelStormsCache[hour]) {
-        return multimodelStormsCache[hour];
-    }
-
-    const response = await fetch(
-        path,
-        { cache: "no-store" }
-    );
-
-    if (!response.ok) {
-        console.warn(
-            "Multimodel STORMS file unavailable for f"
-            + String(hour).padStart(3, "0")
-            + ": HTTP "
-            + response.status
-        );
-        return null;
-    }
-
-    const rows = parseCsv(await response.text());
-    const byName = new Map();
-
-    if (!displayReferenceRun && rows.length > 0) {
-        const referenceText =
-            rows[0].reference_run
-            || rows[0].valid_time
-            || "";
-
-        displayReferenceRun =
-            normalizeToUtcMidnight(referenceText);
-    }
-
-    rows.forEach(row => {
-        byName.set(
-            normalizeMunicipalityName(row.Value_sc),
-            row
-        );
-    });
-
-    multimodelStormsCache[hour] = byName;
-    return byName;
-}
-
 
 
 /* ============================================================
    OLUJA v2 - DIRECT VALIDATED WEB-DATA CONNECTION
 
-   Primary source:
-       data/storm/manifest.json
-       data/storm/runs/<RUN_ID>/fXXX.json
+   Primary source: canonical B5 storm_v2 current pointer and immutable run artifacts.
 
    Behaviour:
    - f003..f072: GEFS + ICON-EU EPS, equal model weights
    - f075..f120: GEFS-only
    - public timeline remains exact 3-hourly f003..f120
    - missing ICON is null/unavailable, never 0
-   - legacy multimodel CSV remains fallback only
    ============================================================ */
 
+let stormV2RunPromise = null;
 let stormV2ManifestDirectPromise = null;
 const stormV2TermDirectCache = new Map();
+
+function resolveStormV2Run() {
+    if (!stormV2RunPromise) {
+        stormV2RunPromise = window.MeteoRiskPublicData.resolveCurrentRun("storm_v2");
+    }
+    return stormV2RunPromise;
+}
+
+function stormExpectedAdminUnits() {
+    return Number(window.MeteoRiskConfig.country.expected_admin_units);
+}
 
 async function loadStormV2ManifestDirect() {
     if (stormV2ManifestDirectPromise) {
@@ -1439,8 +1332,9 @@ async function loadStormV2ManifestDirect() {
 
     stormV2ManifestDirectPromise = (async () => {
         try {
+            const resolvedRun = await resolveStormV2Run();
             const response = await fetch(
-                "data/storm/manifest.json",
+                window.MeteoRiskPublicData.artifactPath(resolvedRun, "manifest.json"),
                 { cache: "no-store" }
             );
 
@@ -1458,7 +1352,8 @@ async function loadStormV2ManifestDirect() {
                 !manifest
                 || manifest.schema !== "meteorisk_storm_v2"
                 || Number(manifest.term_count) !== 40
-                || Number(manifest.municipality_count) !== 194
+                || String(manifest.run_id) !== String(resolvedRun.pointer.current_run)
+                || Number(manifest.municipality_count) !== stormExpectedAdminUnits()
                 || !Array.isArray(manifest.terms)
             ) {
                 console.warn(
@@ -1468,20 +1363,30 @@ async function loadStormV2ManifestDirect() {
             }
 
             manifest.byHour = new Map();
+            let manifestTermsValid = true;
 
             manifest.terms.forEach(term => {
                 const hour = Number(term.forecast_hour);
+                const expectedTermFile = resolvedRun.pointer.run_path
+                    + "/f" + String(hour).padStart(3, "0") + ".json";
 
-                if (Number.isFinite(hour)) {
-                    manifest.byHour.set(
-                        hour,
-                        term
-                    );
+                if (
+                    !Number.isFinite(hour)
+                    || String(term.file) !== expectedTermFile
+                ) {
+                    manifestTermsValid = false;
+                    return;
                 }
+
+                manifest.byHour.set(
+                    hour,
+                    term
+                );
             });
 
             if (
-                manifest.byHour.size !== 40
+                !manifestTermsValid
+                || manifest.byHour.size !== 40
                 || !manifest.byHour.has(3)
                 || !manifest.byHour.has(120)
             ) {
@@ -1490,6 +1395,8 @@ async function loadStormV2ManifestDirect() {
                 );
                 return null;
             }
+
+            manifest.resolvedRun = resolvedRun;
 
             if (
                 !displayReferenceRun
@@ -1536,8 +1443,9 @@ async function loadStormV2TermDirect(hour) {
     }
 
     try {
+        const artifact = "f" + String(key).padStart(3, "0") + ".json";
         const response = await fetch(
-            "data/storm/" + term.file,
+            window.MeteoRiskPublicData.artifactPath(manifest.resolvedRun, artifact),
             { cache: "no-store" }
         );
 
@@ -1556,8 +1464,9 @@ async function loadStormV2TermDirect(hour) {
         if (
             !payload
             || payload.schema !== "meteorisk_storm_v2_term"
+            || String(payload.run_id) !== String(manifest.resolvedRun.pointer.current_run)
             || Number(payload.forecast_hour) !== key
-            || Number(payload.municipality_count) !== 194
+            || Number(payload.municipality_count) !== stormExpectedAdminUnits()
             || !payload.municipalities
         ) {
             console.warn(
@@ -1583,47 +1492,6 @@ async function loadStormV2TermDirect(hour) {
     }
 }
 
-
-async function baseGefForecastHourForSlot(hour) {
-    const stormV2Manifest =
-        await loadStormV2ManifestDirect();
-
-    if (
-        stormV2Manifest
-        && stormV2Manifest.byHour.has(
-            Number(hour)
-        )
-    ) {
-        return Number(hour);
-    }
-
-    const rowsByName =
-        await loadMultimodelStormsRows(
-            hour
-        );
-
-    if (
-        !rowsByName
-        || rowsByName.size === 0
-    ) {
-        return hour;
-    }
-
-    const firstRow =
-        rowsByName.values().next().value;
-
-    const gefsHour = optionalNumber(
-        firstRow
-            ? firstRow.gefs_forecast_hour
-            : null
-    );
-
-    return Number.isFinite(
-        Number(gefsHour)
-    )
-        ? Number(gefsHour)
-        : hour;
-}
 
 
 function applyStormV2DirectPayload(
@@ -1837,213 +1705,6 @@ function applyStormV2DirectPayload(
 }
 
 
-async function applyLegacyMultimodelStormsOverlay(
-    data,
-    hour
-) {
-    if (
-        !data
-        || !geometryData
-    ) {
-        return data;
-    }
-
-    const rowsByName =
-        await loadMultimodelStormsRows(
-            hour
-        );
-
-    if (!rowsByName) {
-        data.storms_multimodel = false;
-        data.storms_multimodel_matches = 0;
-        data.storms_available = false;
-        return data;
-    }
-
-    let matched = 0;
-    let slotSourceModels = "";
-
-    geometryData.features.forEach(
-        feature => {
-            const properties =
-                feature.properties
-                || {};
-
-            const name =
-                normalizeMunicipalityName(
-                    properties.Value_sc
-                    || properties.Value_sl
-                    || properties.Value_e
-                );
-
-            const row =
-                rowsByName.get(name);
-
-            if (!row) return;
-
-            const id =
-                municipalityId(
-                    properties
-                );
-
-            if (
-                !data.municipalities
-                || !data.municipalities[id]
-            ) {
-                return;
-            }
-
-            const target =
-                data.municipalities[id];
-
-            target.storms_multimodel = true;
-
-            target.thunder =
-                optionalNumber(row.thunder_signal);
-            target.hail =
-                optionalNumber(row.hail_signal);
-            target.large_hail =
-                optionalNumber(row.large_hail_signal);
-            target.very_large_hail =
-                optionalNumber(row.very_large_hail_signal);
-
-            target.thunder_risk_color =
-                row.thunder_color || "GREY";
-            target.hail_risk_color =
-                row.hail_color || "GREY";
-            target.large_hail_risk_color =
-                row.large_hail_color || "GREY";
-            target.very_large_hail_risk_color =
-                row.very_large_hail_color || "GREY";
-
-            target.thunder_confidence =
-                row.thunder_confidence || "UNKNOWN";
-            target.hail_confidence =
-                row.hail_confidence || "UNKNOWN";
-            target.large_hail_confidence =
-                row.large_hail_confidence || "UNKNOWN";
-            target.very_large_hail_confidence =
-                row.very_large_hail_confidence || "UNKNOWN";
-
-            target.thunder_ecmwf =
-                optionalNumber(row.ecmwf_thunder);
-            target.thunder_icon =
-                optionalNumber(row.icon_thunder);
-            target.thunder_gefs =
-                optionalNumber(row.gefs_thunder);
-
-            target.hail_ecmwf =
-                optionalNumber(row.ecmwf_hail);
-            target.hail_icon =
-                optionalNumber(row.icon_hail);
-            target.hail_gefs =
-                optionalNumber(row.gefs_hail);
-
-            target.large_hail_ecmwf =
-                optionalNumber(row.ecmwf_large_hail);
-            target.large_hail_icon =
-                optionalNumber(row.icon_large_hail);
-            target.large_hail_gefs =
-                optionalNumber(row.gefs_large_hail);
-
-            target.very_large_hail_ecmwf =
-                optionalNumber(row.ecmwf_very_large_hail);
-            target.very_large_hail_icon =
-                optionalNumber(row.icon_very_large_hail);
-            target.very_large_hail_gefs =
-                optionalNumber(row.gefs_very_large_hail);
-
-            [
-                "thunder",
-                "hail",
-                "large_hail",
-                "very_large_hail"
-            ].forEach(
-                prefix => {
-                    target[
-                        prefix
-                        + "_models_available"
-                    ] =
-                        optionalNumber(
-                            row[
-                                prefix
-                                + "_models_available"
-                            ]
-                        );
-
-                    target[
-                        prefix
-                        + "_model_spread"
-                    ] =
-                        optionalNumber(
-                            row[
-                                prefix
-                                + "_model_spread"
-                            ]
-                        );
-
-                    target[
-                        prefix
-                        + "_dominant_model"
-                    ] =
-                        row[
-                            prefix
-                            + "_dominant_model"
-                        ]
-                        || "";
-
-                    target[
-                        prefix
-                        + "_source_models"
-                    ] =
-                        row[
-                            prefix
-                            + "_source_models"
-                        ]
-                        || "";
-                }
-            );
-
-            target.storm_overview_color =
-                row.storm_overview_color || "GREY";
-            target.storm_overview_confidence =
-                row.storm_overview_confidence || "UNKNOWN";
-            target.storm_dominant_hazard =
-                row.storm_dominant_hazard || "NONE";
-            target.storm_valid_time =
-                row.valid_time || "";
-            target.storm_reference_run =
-                row.reference_run || "";
-            target.storm_gefs_forecast_hour =
-                optionalNumber(row.gefs_forecast_hour);
-
-            if (!slotSourceModels) {
-                slotSourceModels =
-                    row.thunder_source_models
-                    || row.hail_source_models
-                    || "";
-            }
-
-            matched += 1;
-        }
-    );
-
-    data.storms_multimodel =
-        matched > 0;
-    data.storms_multimodel_matches =
-        matched;
-    data.storms_available =
-        matched > 0;
-    data.storms_multimodel_source =
-        slotSourceModels
-        || "ECMWF ENS | GEFS";
-    data.storms_multimodel_note =
-        "Developmental multimodel risk signal; not a calibrated probability.";
-
-    return data;
-}
-
-
 async function applyMultimodelStormsOverlay(
     data,
     hour
@@ -2064,7 +1725,7 @@ async function applyMultimodelStormsOverlay(
                 payload
             );
 
-        if (matched === 194) {
+        if (matched === stormExpectedAdminUnits()) {
             data.storms_multimodel = true;
             data.storms_multimodel_matches = matched;
             data.storms_available = true;
@@ -2094,16 +1755,17 @@ async function applyMultimodelStormsOverlay(
         console.warn(
             "OLUJA v2 municipality overlay matched "
             + matched
-            + "/194 for f"
+            + "/" + stormExpectedAdminUnits() + " for f"
             + String(hour).padStart(3, "0")
-            + "; falling back to legacy storm overlay."
+            + "; canonical STORM v2 overlay unavailable."
         );
     }
 
-    return applyLegacyMultimodelStormsOverlay(
-        data,
-        hour
-    );
+    data.storms_multimodel = false;
+    data.storms_multimodel_matches = 0;
+    data.storms_available = false;
+    data.storm_v2_available = false;
+    return data;
 }
 
 
@@ -2112,17 +1774,8 @@ async function applyMultimodelStormsOverlay(
    ============================================================ */
 
 function localTodayKey() {
-    return localDateKeyBelgrade(
+    return window.MeteoRiskConfig.localDateKey(
         new Date().toISOString()
-    );
-}
-
-
-function startOfLocalToday() {
-    const today = localTodayKey();
-
-    return new Date(
-        today + "T00:00:00+02:00"
     );
 }
 
@@ -2373,7 +2026,7 @@ async function buildTimelineSlots() {
     ) {
         const date = new Date(ms);
         const localDate =
-            localDateKeyBelgrade(
+            window.MeteoRiskConfig.localDateKey(
                 date.toISOString()
             );
 
@@ -2825,7 +2478,7 @@ async function showTimelineSlot(index) {
         && document.getElementById("overview-panel").classList.contains("open")
     ) {
         overviewSelectedDate =
-            localDateKeyBelgrade(
+            window.MeteoRiskConfig.localDateKey(
                 currentModelData.valid_time
             );
 
@@ -4561,7 +4214,7 @@ function popupContentCore(
 
             <div class="popup-valid">
                 ${currentLanguage === "sr" ? "Дневна прогноза" : "Daily forecast"}:
-                ${data.temperature_date || localDateKeyBelgrade(currentModelData?.valid_time) || "—"}
+                ${data.temperature_date || window.MeteoRiskConfig.localDateKey(currentModelData?.valid_time) || "—"}
             </div>
 
             ${temperatureDetailHtml(data)}
@@ -4585,7 +4238,7 @@ function popupContentCore(
                     return new Intl.DateTimeFormat(
                         currentLanguage === "sr" ? "sr-RS" : "en-GB",
                         {
-                            timeZone: "Europe/Belgrade",
+                            timeZone: METEORISK_TIME_ZONE,
                             day: "2-digit",
                             month: "2-digit",
                             year: "numeric",
@@ -4605,7 +4258,7 @@ function popupContentCore(
             <div class="popup-title">${name}</div>
             <div class="popup-valid">
                 ${currentLanguage === "sr" ? "Дневна прогноза" : "Daily forecast"}:
-                ${data.fire_fwi_date || localDateKeyBelgrade(currentModelData?.valid_time) || "—"}
+                ${data.fire_fwi_date || window.MeteoRiskConfig.localDateKey(currentModelData?.valid_time) || "—"}
             </div>
             ${fireFwiDetailHtml(data)}
         `;
@@ -4904,10 +4557,7 @@ async function loadForecast(
 
     try {
 
-        const baseGefHour =
-            await baseGefForecastHourForSlot(
-                hour
-            );
+        const baseGefHour = Number(hour);
 
         const response =
             await fetch(
@@ -4949,7 +4599,7 @@ async function loadForecast(
         await applyFireOverlay(data);
         await applyEnvironmentOverlay(data);
 
-        data.fire_available = Boolean(data.fire_fwi_available || data.fire_hdw_available);
+        data.fire_available = Boolean(data.fire_hdw_available);
 
         currentModelData =
             data;
@@ -5802,10 +5452,7 @@ async function loadAllForecasts() {
         FORECAST_HOURS.map(
             async hour => {
 
-                const baseGefHour =
-                    await baseGefForecastHourForSlot(
-                        hour
-                    );
+                const baseGefHour = Number(hour);
 
                 const response = await fetch(
                     forecastFile(baseGefHour),
@@ -5825,8 +5472,7 @@ async function loadAllForecasts() {
 
                 /*
                    STORMS must remain attached to the public slot here.
-                   For +003...+024, baseGefHour may intentionally differ from
-                   the public hour (e.g. public +003 -> older GEFS f033).
+                   STORM v2 and the core forecast use the same canonical 3-hour slot.
                 */
                 await applyMultimodelStormsOverlay(
                     data,
@@ -5881,10 +5527,10 @@ function overviewWindowIntersectsSelectedDate(
     }
 
     const startKey =
-        localDateKeyBelgrade(startIso);
+        window.MeteoRiskConfig.localDateKey(startIso);
 
     const endKey =
-        localDateKeyBelgrade(endIso);
+        window.MeteoRiskConfig.localDateKey(endIso);
 
     if (!startKey || !endKey) {
         return false;
@@ -5934,10 +5580,10 @@ function formatOverviewInterval(
     }
 
     const startKey =
-        localDateKeyBelgrade(startIso);
+        window.MeteoRiskConfig.localDateKey(startIso);
 
     const endKey =
-        localDateKeyBelgrade(endIso);
+        window.MeteoRiskConfig.localDateKey(endIso);
 
     const locale =
         currentLanguage === "sr"
@@ -6242,7 +5888,7 @@ function stormOverviewGroupHtml(
 
         forecasts.forEach(forecast => {
             if (
-                localDateKeyBelgrade(
+                window.MeteoRiskConfig.localDateKey(
                     forecast.valid_time
                 ) !== overviewSelectedDate
             ) {
@@ -6352,7 +5998,7 @@ function overviewDayRisk(forecasts, municipalityID, dateKey) {
     const windLevel = {green:0, yellow:1, orange:2, red:3, purple:4};
 
     forecasts.forEach(forecast => {
-        if (localDateKeyBelgrade(forecast.valid_time) !== dateKey) return;
+        if (window.MeteoRiskConfig.localDateKey(forecast.valid_time) !== dateKey) return;
         const municipality = forecast.municipalities[municipalityID];
         if (!municipality) return;
 
@@ -6382,10 +6028,6 @@ function overviewDayRisk(forecasts, municipalityID, dateKey) {
                     municipality.heat_stress_color
                 )
             );
-        }
-
-        if (municipality.fire_fwi_available) {
-            strongest = Math.max(strongest, fireFwiRiskLevel(municipality));
         }
 
         if (municipality.fire_hdw_available) {
@@ -6454,7 +6096,7 @@ function overviewCalendarsHtml(
             timelineSlots
                 .map(
                     slot =>
-                        localDateKeyBelgrade(
+                        window.MeteoRiskConfig.localDateKey(
                             slot.valid_time
                         )
                 )
@@ -6712,7 +6354,7 @@ function heatStressOverviewItemHtml(
             significant
                 .filter(
                     item =>
-                        localDateKeyBelgrade(
+                        window.MeteoRiskConfig.localDateKey(
                             item.forecast.valid_time
                         ) === overviewSelectedDate
                 )
@@ -6827,7 +6469,7 @@ function temperatureOverviewGroupHtml(
 
     forecasts.forEach(forecast => {
         const dateKey =
-            localDateKeyBelgrade(
+            window.MeteoRiskConfig.localDateKey(
                 forecast.valid_time
             );
 
@@ -6982,7 +6624,7 @@ function renderOverview(forecasts, feature) {
         overviewSelectedDate
         ? visibleForecasts.filter(
             forecast =>
-                localDateKeyBelgrade(
+                window.MeteoRiskConfig.localDateKey(
                     forecast.valid_time
                 ) === overviewSelectedDate
         )
@@ -7103,7 +6745,7 @@ function renderOverview(forecasts, feature) {
                         (slot, index) => ({
                             index,
                             dateKey:
-                                localDateKeyBelgrade(
+                                window.MeteoRiskConfig.localDateKey(
                                     slot.valid_time
                                 ),
                             time:
@@ -7161,7 +6803,7 @@ async function openFiveDayOverview(feature) {
 
     overviewSelectedDate =
         currentModelData && currentModelData.valid_time
-        ? localDateKeyBelgrade(
+        ? window.MeteoRiskConfig.localDateKey(
             currentModelData.valid_time
         )
         : null;
@@ -7354,11 +6996,10 @@ function findMunicipalities(
                     feature.properties;
 
                 const names =
-                    [
-                        p.Value_sc,
-                        p.Value_sl,
-                        p.Value_e
-                    ]
+                    Object.values(
+                        window.MeteoRiskConfig.country.name_columns || {}
+                    )
+                    .map(column => p[column])
                     .filter(
                         Boolean
                     )
@@ -8086,35 +7727,29 @@ async function discoverLatestProductRun() {
         }
     }
 
-    /* Temperature daily CSV contains the actual model_run. */
-    try {
-        const response = await fetch(
-            "data/temperature/temperature_day0.csv",
-            { cache: "no-store" }
-        );
-
-        if (response.ok) {
-            const rows = parseCsv(
-                await response.text()
+    function publicRunIdDate(runId) {
+        const match =
+            /^(\d{4})(\d{2})(\d{2})_(\d{2})$/.exec(
+                String(runId || "")
             );
+        if (!match) return null;
+        const d = new Date(
+            Date.UTC(
+                Number(match[1]),
+                Number(match[2]) - 1,
+                Number(match[3]),
+                Number(match[4])
+            )
+        );
+        return Number.isFinite(d.getTime()) ? d : null;
+    }
 
-            const runText =
-                rows.length
-                ? rows[0].model_run
-                : null;
-
-            const d =
-                runText
-                ? new Date(runText)
-                : null;
-
-            if (
-                d
-                && Number.isFinite(d.getTime())
-            ) {
-                candidates.push(d);
-            }
-        }
+    /* Canonical B5 pointers carry the authoritative model-run identity. */
+    try {
+        const resolved =
+            await window.MeteoRiskPublicData.resolveCurrentRun("temperature_5day");
+        const d = publicRunIdDate(resolved.pointer.current_run);
+        if (d) candidates.push(d);
     } catch (error) {
         console.warn(
             "Temperature run could not be discovered.",
@@ -8122,41 +7757,11 @@ async function discoverLatestProductRun() {
         );
     }
 
-    /* 24h thermal stress: f003 valid time minus 3 h = model run. */
     try {
-        const response = await fetch(
-            "data/thermal_stress_24h/thermal_stress_f003.csv",
-            { cache: "no-store" }
-        );
-
-        if (response.ok) {
-            const rows = parseCsv(
-                await response.text()
-            );
-
-            if (
-                rows.length
-                && rows[0].valid_time
-            ) {
-                const valid =
-                    new Date(
-                        rows[0].valid_time
-                    );
-
-                if (
-                    Number.isFinite(
-                        valid.getTime()
-                    )
-                ) {
-                    candidates.push(
-                        new Date(
-                            valid.getTime()
-                            - 3 * 60 * 60 * 1000
-                        )
-                    );
-                }
-            }
-        }
+        const resolved =
+            await window.MeteoRiskPublicData.resolveCurrentRun("thermal_stress_24h");
+        const d = publicRunIdDate(resolved.pointer.current_run);
+        if (d) candidates.push(d);
     } catch (error) {
         console.warn(
             "Thermal-stress run could not be discovered.",
@@ -8335,7 +7940,6 @@ function updateLanguage() {
     document.getElementById("temperature-group-label").textContent = t.temperatureGroup;
     document.getElementById("btn-max-temperature").textContent = t.maxTemperature;
     document.getElementById("fire-group-label").textContent = t.fireGroup;
-    document.getElementById("btn-fire-fwi").textContent = t.fireDanger;
     document.getElementById("btn-fire-hdw").textContent = t.fireSpread;
     document.getElementById("air-quality-group-label").textContent = t.airQualityGroup;
     document.getElementById("btn-air-pm25").textContent = t.airPm25;
