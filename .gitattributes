@@ -4,3 +4,4 @@ data/countries/BA/static/territorial_zones_web.geojson -text
 data/static/municipalities_web.geojson -text
 data/countries/MK/static/municipalities_web.geojson -text
 data/countries/GR/static/municipalities_web.geojson -text
+data/countries/RS/static/municipalities_web.geojson -text
